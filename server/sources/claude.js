@@ -25,7 +25,13 @@ function describeTool(name, input = {}) {
 function ingest(st, line) {
   if (line.startsWith('{"type":"api-request')) return // blobs grandes, sem uso aqui
   const o = JSON.parse(line)
-  if (o.timestamp) st.lastTs = o.timestamp
+  if (o.timestamp) {
+    st.lastTs = o.timestamp
+    if (!st.firstTs) st.firstTs = o.timestamp
+  }
+  if (o.cwd) st.cwd = o.cwd
+  if (o.entrypoint) st.entrypoint = o.entrypoint
+  if (o.version) st.version = o.version
   if (o.gitBranch && o.gitBranch !== 'HEAD') st.branch = o.gitBranch
 
   if (o.type === 'ai-title') st.title = o.aiTitle
@@ -72,7 +78,41 @@ function ingest(st, line) {
   }
 }
 
-const track = makeTracker(() => ({ lastMsgId: null, lastMsgOut: 0, lastStop: null, handedBack: false }), ingest)
+const track = makeTracker(
+  () => ({ lastMsgId: null, lastMsgOut: 0, lastStop: null, handedBack: false, firstTs: null, cwd: null, entrypoint: null, version: null }),
+  ingest,
+)
+
+// Sessões em devcontainer: o PID delas é do container, então não dá para
+// testar se estão vivas daqui, e a limpeza do Claude no Mac apaga o .json de
+// registro delas. Elas são reconhecidas pelo transcript, em pastas de projeto
+// fora do home do Mac (ex.: cwd /casl-api -> ~/.claude/projects/-casl-api).
+const HOST_PREFIX = os.homedir().replace(/[^a-zA-Z0-9]/g, '-')
+const FOREIGN_WINDOW_MS = 20 * 60 * 1000 // sem escrever há mais que isso = sessão fechada
+const FOREIGN_BUSY_MS = 10 * 60 * 1000
+
+function isForeignDomain(s) {
+  return !!s.pidDomain && s.pidDomain !== process.platform
+}
+
+// Último momento em que o transcript ou algum subagente dele foi escrito.
+function lastWrite(transcript) {
+  let t = 0
+  try { t = fs.statSync(transcript).mtimeMs } catch { return 0 }
+  const subDir = path.join(transcript.replace(/\.jsonl$/, ''), 'subagents')
+  let names = []
+  try { names = fs.readdirSync(subDir) } catch { return t }
+  for (const n of names) {
+    if (!n.endsWith('.jsonl')) continue
+    try { t = Math.max(t, fs.statSync(path.join(subDir, n)).mtimeMs) } catch {}
+  }
+  return t
+}
+
+function foreignStatus(st, now) {
+  if (st.lastStop === 'end_turn' || st.lastStop === 'halted') return 'idle'
+  return now - st.mtime < FOREIGN_BUSY_MS ? 'busy' : 'idle'
+}
 
 function isAlive(pid) {
   try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' }
@@ -137,18 +177,23 @@ export function collect(now) {
   try { files = fs.readdirSync(SESSIONS_DIR).filter((f) => /^\d+\.json$/.test(f)) } catch { return [] }
 
   const out = []
+  const seen = new Set()
   for (const f of files) {
     let s
     try { s = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8')) } catch { continue }
-    if (!s.pid || !isAlive(s.pid)) continue
+    const foreign = isForeignDomain(s)
+    if (!s.pid || (!foreign && !isAlive(s.pid))) continue
 
     const transcript = s.sessionId && findTranscript(s.sessionId)
+    if (foreign && (!transcript || now - lastWrite(transcript) > FOREIGN_WINDOW_MS)) continue
     const st = transcript ? track(transcript) : null
     const subagents = transcript ? readSubagents(transcript, now) : []
     const status = s.status || (st && now - st.mtime < 30_000 ? 'busy' : 'idle')
+    seen.add(s.sessionId)
 
     out.push({
-      pid: s.pid,
+      container: foreign,
+      pid: foreign ? null : s.pid,
       sessionId: s.sessionId,
       name: s.name || path.basename(s.cwd || '') || `pid ${s.pid}`,
       cwd: s.cwd,
@@ -170,6 +215,58 @@ export function collect(now) {
       events: st?.events || [],
       subagents,
     })
+  }
+  out.push(...collectForeign(now, seen))
+  return out
+}
+
+// Sessões de devcontainer cujo registro sumiu: acha pelos transcripts recentes.
+function collectForeign(now, seen) {
+  let dirs = []
+  try { dirs = fs.readdirSync(PROJECTS_DIR) } catch { return [] }
+  const out = []
+  for (const d of dirs) {
+    if (d.startsWith(HOST_PREFIX)) continue // sessões do Mac vêm do registro
+    const projDir = path.join(PROJECTS_DIR, d)
+    let names = []
+    try { names = fs.readdirSync(projDir) } catch { continue }
+    for (const n of names) {
+      if (!n.endsWith('.jsonl')) continue
+      const sessionId = n.slice(0, -'.jsonl'.length)
+      if (seen.has(sessionId)) continue
+      const transcript = path.join(projDir, n)
+      const written = lastWrite(transcript)
+      if (now - written > FOREIGN_WINDOW_MS) continue
+
+      const st = track(transcript)
+      if (!st.cwd) continue // transcript sem conversa (ex.: só metadados)
+      const subagents = readSubagents(transcript, now)
+      const status = subagents.some((a) => a.status === 'running') ? 'busy' : foreignStatus(st, now)
+      out.push({
+        container: true,
+        pid: null,
+        sessionId,
+        name: path.basename(st.cwd),
+        cwd: st.cwd,
+        status,
+        waitingFor: null,
+        startedAt: st.firstTs ? Date.parse(st.firstTs) : null,
+        statusUpdatedAt: written || null,
+        app: st.entrypoint,
+        version: st.version,
+        title: st.title,
+        lastPrompt: st.lastPrompt,
+        model: st.model,
+        branch: st.branch,
+        action: st.action,
+        steps: st.steps,
+        outTokens: st.outTokens,
+        ctxTokens: st.ctxTokens,
+        lastTs: st.lastTs,
+        events: st.events,
+        subagents,
+      })
+    }
   }
   return out
 }

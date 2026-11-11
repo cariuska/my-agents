@@ -67,7 +67,7 @@ function Detail({ s, now, nameOf }) {
     <section className="panel detail">
       <header>
         <h1><SourceTag id={s.source} /> <span className="tag">{nameOf(agentKey(s.sessionId)).name}</span> {s.title || s.project}</h1>
-        <span className="meta">{s.app ? `${s.app} · ` : ''}{s.name} · {s.startedAt ? `${dur(now - s.startedAt)} · ` : ''}{shortModel(s.model)}</span>
+        <span className="meta">{s.container ? 'devcontainer · ' : ''}{s.app ? `${s.app} · ` : ''}{s.name} · {s.startedAt ? `${dur(now - s.startedAt)} · ` : ''}{shortModel(s.model)}</span>
       </header>
       <p className="statusline" style={{ color: st.color }}>
         {s.status === 'idle' ? 'No café' : st.label}{s.statusUpdatedAt ? ` há ${dur(now - s.statusUpdatedAt)}` : ''}
