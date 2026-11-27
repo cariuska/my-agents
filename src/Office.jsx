@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { clip, dur, hash, sourceOf } from './format.js'
+import { CTX_ALERT, clip, ctxPct, dur, hash, sourceOf } from './format.js'
 import { agentKey } from './names.js'
 
 // Sala de comando holográfica. Cada agente (sessão ou subagente) tem a sua
@@ -204,6 +204,10 @@ function Desk({ x, y, who, onSelect }) {
   const waiting = who.status === 'waiting'
   const away = who.status === 'idle'
   const sc = STATUS_COLOR[who.status] || STATUS_COLOR.idle
+  const pct = who.ctx
+  const full = pct != null && pct >= CTX_ALERT
+  const screen = waiting || full ? '#ff4d6d' : CYAN
+  const ctxFill = full ? '#ff4d6d' : pct >= 60 ? AMBER : '#3dffb0'
   return (
     <g
       transform={`translate(${x} ${y})`}
@@ -223,26 +227,39 @@ function Desk({ x, y, who, onSelect }) {
         </g>
       )}
       {/* tela holográfica */}
-      <rect x="27" y="14" width="30" height="19" fill={waiting ? '#ff4d6d' : CYAN} fillOpacity={working ? 0.16 : 0.06} stroke={waiting ? '#ff4d6d' : CYAN} strokeWidth="0.7" opacity={working || waiting ? 1 : 0.55} />
+      <rect className={full ? 'ctx-full' : undefined} x="27" y="14" width="30" height="19" fill={screen} fillOpacity={working || full ? 0.16 : 0.06} stroke={screen} strokeWidth="0.7" opacity={working || waiting || full ? 1 : 0.55} />
       {working && (
         <g className="code">
-          <rect x="30" y="17.5" width="13" height="1.4" fill="#c9f6ff" />
-          <rect x="30" y="21" width="20" height="1.4" fill={CYAN} />
-          <rect x="30" y="24.5" width="9" height="1.4" fill="#3dffb0" />
-          <rect x="41" y="24.5" width="8" height="1.4" fill="#ffb347" />
-          <rect x="30" y="28" width="16" height="1.4" fill={CYAN} />
+          <rect x="30" y="16.5" width="13" height="1.2" fill="#c9f6ff" />
+          <rect x="30" y="19.2" width="20" height="1.2" fill={CYAN} />
+          <rect x="30" y="21.9" width="9" height="1.2" fill="#3dffb0" />
+          <rect x="41" y="21.9" width="8" height="1.2" fill="#ffb347" />
         </g>
       )}
       {away && (
         <g fill={AMBER} opacity="0.85">
-          <rect x="38" y="20" width="6" height="6" /><rect x="44" y="21" width="2" height="3" />
-          <rect x="39" y="17" width="1" height="2" className="steam" /><rect x="42" y="16" width="1" height="2" className="steam" />
+          <rect x="38" y="18" width="5" height="5" /><rect x="43" y="19" width="2" height="2.5" />
+          <rect x="39" y="15.5" width="1" height="1.5" className="steam" /><rect x="41.5" y="15" width="1" height="1.5" className="steam" />
+        </g>
+      )}
+      {/* contexto usado: número e barra no rodapé da tela */}
+      {pct != null && (
+        <g>
+          <text x="29.5" y="30.6" fontSize="5" fill={full ? '#ffc2cd' : '#c9f6ff'} className="num">{pct}%</text>
+          <rect x="43" y="28" width="12" height="2" fill={CYAN} opacity="0.2" />
+          <rect x="43" y="28" width={(12 * pct) / 100} height="2" fill={ctxFill} />
         </g>
       )}
       <path d="M36 37L42 33L48 37Z" fill={CYAN} opacity="0.25" />
       {/* anel de estado sob o assento */}
       <ellipse className={working ? 'pulse' : undefined} cx="81" cy="36" rx="11" ry="3" fill={sc} fillOpacity="0.18" stroke={sc} strokeWidth="0.7" />
       {waiting && <g className="alert" fill="#ff4d6d"><path d="M98 10H102L101 21H99Z" /><rect x="98.5" y="23" width="3" height="3" /></g>}
+      {full && !waiting && (
+        <g className="alert">
+          <path d="M100 9L107 22H93Z" fill="#ff4d6d" />
+          <rect x="99.3" y="13" width="1.4" height="5" fill="#04141f" /><rect x="99.3" y="19" width="1.4" height="1.4" fill="#04141f" />
+        </g>
+      )}
       {/* bancada; a faixa colorida identifica a sessão dona da equipe */}
       <path d="M22 37H106L110 41V58L106 62H22L18 58V41Z" fill="#06202e" fillOpacity="0.92" stroke={CYAN} strokeWidth="0.7" />
       <rect x="22" y="39.5" width="84" height="1.6" fill={who.team} />
@@ -352,7 +369,7 @@ export default function Office({ sessions, selectedId, onSelect, now, nameOf }) 
       const s = ag.s
       const idle = s.status === 'idle'
       const label = s.name
-      desks[deskSlots.current.get(ag.key)] = { name: person.name, label, src, status: s.status, sessionId: s.sessionId, team, selected: s.sessionId === selectedId, tooltip: `${person.name} (${src.label}) — ${s.name}: ${s.title || s.project}` }
+      desks[deskSlots.current.get(ag.key)] = { name: person.name, label, src, status: s.status, sessionId: s.sessionId, team, ctx: ctxPct(s), selected: s.sessionId === selectedId, tooltip: `${person.name} (${src.label}) — ${s.name}: ${s.title || s.project}${ctxPct(s) != null ? ` · contexto ${ctxPct(s)}%` : ''}` }
       agentDots.push({ key: ag.key, kind: 'session', color: idle ? AMBER : STATUS_COLOR[s.status] || STATUS_COLOR.idle })
       if (idle) {
         const sp = cafeSpot(cafeSlots.current.get(ag.key))
@@ -368,7 +385,7 @@ export default function Office({ sessions, selectedId, onSelect, now, nameOf }) 
       mover = { seed: s.sessionId, cap: null, working: s.status === 'busy', cafe: idle, tooltip: `${person.name} (${src.label}) — ${s.name}${idle ? ' (no café)' : ''}` }
     } else {
       const a = ag.a
-      desks[deskSlots.current.get(ag.key)] = { name: person.name, label: a.description, src, status: 'running', sessionId: ag.s.sessionId, team, selected: false, tooltip: `${person.name} (${src.label}) — ${a.description} (subagente de ${ag.s.name})${a.action ? ': ' + a.action : ''}` }
+      desks[deskSlots.current.get(ag.key)] = { name: person.name, label: a.description, src, status: 'running', sessionId: ag.s.sessionId, team, ctx: ctxPct(a), selected: false, tooltip: `${person.name} (${src.label}) — ${a.description} (subagente de ${ag.s.name})${a.action ? ': ' + a.action : ''}` }
       agentDots.push({ key: ag.key, kind: 'sub', color: STATUS_COLOR.running })
       if (a.action) speakers.push({ x: c.x + 64, y: c.y - 4, text: a.action })
       mover = { seed: a.id, cap: '#2f7dff', working: true, cafe: false, tooltip: `${person.name} — ${a.description}` }

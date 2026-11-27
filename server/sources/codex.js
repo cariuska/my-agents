@@ -94,6 +94,7 @@ function ingest(st, line) {
       case 'token_count':
         st.outTokens = p.info?.total_token_usage?.output_tokens ?? st.outTokens
         st.ctxTokens = p.info?.last_token_usage?.input_tokens ?? st.ctxTokens
+        st.ctxWindow = p.info?.model_context_window ?? st.ctxWindow
         break
       default:
         if (/approval_request$/.test(p.type || '')) {
@@ -187,6 +188,7 @@ export function collect(now) {
       steps: st.steps,
       outTokens: st.outTokens,
       ctxTokens: st.ctxTokens,
+      ctxWindow: st.ctxWindow || null,
       lastTs: st.lastTs,
       events: st.events,
       subagents: [],

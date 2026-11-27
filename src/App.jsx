@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Office from './Office.jsx'
-import { SOURCES, clip, clock, dur, shortModel, sourceOf, statusOf, tokens } from './format.js'
+import { CTX_ALERT, SOURCES, clip, clock, ctxColor, ctxPct, dur, shortModel, sourceOf, statusOf, tokens } from './format.js'
 import { agentKey, useNames } from './names.js'
 
 const POLL_MS = 2000
@@ -25,6 +25,26 @@ function useAgents() {
     return () => { stop = true; clearInterval(t) }
   }, [])
   return { data, error }
+}
+
+// Avisa pelo sistema quando um agente passa de CTX_ALERT% do contexto (uma vez por subida).
+function useContextAlerts(full, nameOf) {
+  const warned = useRef(new Set())
+  useEffect(() => {
+    if (typeof Notification === 'undefined') return
+    const now = new Set(full.map((f) => f.key))
+    for (const k of [...warned.current]) if (!now.has(k)) warned.current.delete(k) // caiu (ex.: compactou): pode avisar de novo
+    const fresh = full.filter((f) => !warned.current.has(f.key))
+    if (!fresh.length) return
+    const send = () => {
+      for (const f of fresh) {
+        warned.current.add(f.key)
+        new Notification(`${nameOf(f.key).name}: contexto em ${f.pct}%`, { body: `${f.label} — perto do limite (${tokens(f.ctxTokens)} de ${tokens(f.ctxWindow)})`, tag: `ctx-${f.key}` })
+      }
+    }
+    if (Notification.permission === 'granted') send()
+    else if (Notification.permission === 'default') Notification.requestPermission().then((p) => p === 'granted' && send())
+  }, [full.map((f) => f.key).join('|')])
 }
 
 // Anel do cabeçalho: quantos agentes (sessões + subagentes) estão trabalhando agora.
@@ -75,7 +95,17 @@ function Detail({ s, now, nameOf }) {
       </p>
       <dl className="stats">
         <div><dt>passos</dt><dd>{s.steps}</dd></div>
-        <div><dt>contexto</dt><dd>{tokens(s.ctxTokens)}</dd></div>
+        <div>
+          <dt>contexto</dt>
+          <dd>
+            {ctxPct(s) != null ? <>{ctxPct(s)}%<small> · {tokens(s.ctxTokens)} de {tokens(s.ctxWindow)}</small></> : tokens(s.ctxTokens)}
+          </dd>
+          {ctxPct(s) != null && (
+            <div className="ctx-bar" role="meter" aria-label="Contexto usado" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ctxPct(s)}>
+              <span style={{ width: `${ctxPct(s)}%`, background: ctxColor(ctxPct(s)) }} />
+            </div>
+          )}
+        </div>
         <div><dt>tokens gerados</dt><dd>{tokens(s.outTokens)}</dd></div>
         {s.source === 'claude' && <div><dt>subagentes</dt><dd>{running.length}<small> de {s.subagents.length}</small></dd></div>}
       </dl>
@@ -96,6 +126,11 @@ function Detail({ s, now, nameOf }) {
       )}
     </section>
   )
+}
+
+function ContextAlerts({ full, nameOf }) {
+  useContextAlerts(full, nameOf)
+  return null
 }
 
 export default function App() {
@@ -130,6 +165,11 @@ export default function App() {
   const needsYou = sessions.filter((s) => s.status === 'waiting')
   const allSubs = sessions.flatMap((s) => s.subagents.map((a) => ({ ...a, session: s.name, sessionId: s.sessionId })))
   const runningSubs = allSubs.filter((a) => a.status === 'running')
+  // agentes (sessões e subagentes rodando) acima do limite de contexto
+  const ctxFull = [
+    ...sessions.map((s) => ({ key: agentKey(s.sessionId), sessionId: s.sessionId, label: s.title || s.name, pct: ctxPct(s), ctxTokens: s.ctxTokens, ctxWindow: s.ctxWindow })),
+    ...runningSubs.map((a) => ({ key: agentKey(a.sessionId, a.id), sessionId: a.sessionId, label: `${a.description} (subagente de ${a.session})`, pct: ctxPct(a), ctxTokens: a.ctxTokens, ctxWindow: a.ctxWindow })),
+  ].filter((f) => f.pct != null && f.pct >= CTX_ALERT).sort((a, b) => b.pct - a.pct)
   const totals = {
     busy: sessions.filter((s) => s.status === 'busy').length,
     steps: sessions.reduce((n, s) => n + s.steps, 0) + allSubs.reduce((n, a) => n + a.steps, 0),
@@ -138,6 +178,7 @@ export default function App() {
 
   return (
     <main className="layout">
+      <ContextAlerts full={ctxFull} nameOf={nameOf} />
       <header className="hud">
         <Ring value={totals.busy + runningSubs.length} total={sessions.length + runningSubs.length} />
         <div className="hud-title">
@@ -161,8 +202,10 @@ export default function App() {
             </button>
           ))}
         </nav>
-        <div className={`hud-state${needsYou.length ? ' hud-alert' : ''}`}>
-          {needsYou.length ? `${needsYou.length} esperando por você` : error ? 'sem sinal' : 'sistemas online'}
+        <div className={`hud-state${needsYou.length || ctxFull.length ? ' hud-alert' : ''}`}>
+          {needsYou.length ? `${needsYou.length} esperando por você`
+            : ctxFull.length ? `${ctxFull.length} com contexto acima de ${CTX_ALERT}%`
+            : error ? 'sem sinal' : 'sistemas online'}
         </div>
         <time className="hud-clock">{clock(now)}</time>
       </header>
@@ -216,12 +259,26 @@ export default function App() {
           ))}
         </Panel>
 
+        {ctxFull.length > 0 && (
+          <Panel title={`Contexto acima de ${CTX_ALERT}%`} tone="pink">
+            {ctxFull.map((f) => (
+              <button key={f.key} className="row" onClick={() => setSelectedId(f.sessionId)}>
+                <span className="tag">{nameOf(f.key).name}</span>
+                <span className="row-text">{f.label}</span>
+                <span className="ctx-chip" style={{ color: ctxColor(f.pct) }}>{f.pct}%</span>
+              </button>
+            ))}
+            <p className="muted small">Perto do limite o agente compacta a conversa e pode perder detalhes. Vale fechar a tarefa ou começar uma sessão nova.</p>
+          </Panel>
+        )}
+
         <Panel title="Agentes">
           {sessions.length === 0 && <p className="muted">Nenhuma sessão aberta.</p>}
           {sessions.map((s) => (
             <button key={s.sessionId} className={`row${s.sessionId === selected?.sessionId ? ' row-on' : ''}`} onClick={() => setSelectedId(s.sessionId)}>
               <span className="tag"><SourceTag id={s.source} /> {nameOf(agentKey(s.sessionId)).name}</span>
               <span className="row-text">{s.name} · {s.title || s.project}</span>
+              {ctxPct(s) != null && <span className="ctx-chip" style={{ color: ctxColor(ctxPct(s)) }} title={`Contexto: ${tokens(s.ctxTokens)} de ${tokens(s.ctxWindow)}`}>{ctxPct(s)}%</span>}
               {s.status === 'idle'
                 ? <span className="chip" style={{ color: 'var(--amber)', borderColor: 'var(--amber)' }}>no café</span>
                 : <span className="chip" style={{ color: statusOf(s.status).color, borderColor: statusOf(s.status).color }}>{statusOf(s.status).label.toLowerCase()}</span>}

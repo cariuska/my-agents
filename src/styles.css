@@ -202,3 +202,11 @@ p { margin: 0; }
 .empty { min-height: 100vh; display: grid; place-content: center; text-align: center; gap: 8px; padding: 24px; }
 .empty h1 { margin: 0; font: 700 26px var(--display); letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); }
 .sub-name b { font-weight: 400; color: var(--cyan); margin-right: 4px; }
+
+/* uso da janela de contexto */
+.ctx-bar { height: 4px; margin-top: 6px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.ctx-bar > span { display: block; height: 100%; transition: width .4s ease; }
+.ctx-chip { font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row:has(.ctx-chip) { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.office .ctx-full { animation: blink 1s steps(2, start) infinite; }
+@media (prefers-reduced-motion: reduce) { .office .ctx-full { animation: none; } }

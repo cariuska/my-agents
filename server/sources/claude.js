@@ -13,6 +13,14 @@ const SESSIONS_DIR = path.join(dir, 'sessions')
 const PROJECTS_DIR = path.join(dir, 'projects')
 const SUBAGENT_QUIET_MS = 5 * 60 * 1000 // sem escrever há mais que isso = parado
 
+// O transcript não diz o tamanho da janela de contexto. Padrão 200k; se a
+// sessão já passou disso, ela está na janela de 1M. CLAUDE_CONTEXT_WINDOW força um valor.
+const CTX_OVERRIDE = Number(process.env.CLAUDE_CONTEXT_WINDOW) || 0
+function ctxWindow(st) {
+  if (CTX_OVERRIDE) return CTX_OVERRIDE
+  return (st?.ctxMax || 0) > 200_000 ? 1_000_000 : 200_000
+}
+
 function describeTool(name, input = {}) {
   if (name.startsWith('mcp__')) name = name.split('__').pop() // mcp__servidor__ferramenta -> ferramenta
   const detail =
@@ -56,6 +64,7 @@ function ingest(st, line) {
     const u = m.usage
     if (u && !synthetic) {
       st.ctxTokens = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0)
+      st.ctxMax = Math.max(st.ctxMax, st.ctxTokens)
       const out = u.output_tokens || 0
       // a mesma mensagem pode aparecer em várias linhas (uma por bloco)
       if (m.id && m.id === st.lastMsgId) st.outTokens += out - st.lastMsgOut
@@ -79,7 +88,7 @@ function ingest(st, line) {
 }
 
 const track = makeTracker(
-  () => ({ lastMsgId: null, lastMsgOut: 0, lastStop: null, handedBack: false, firstTs: null, cwd: null, entrypoint: null, version: null }),
+  () => ({ ctxMax: 0, lastMsgId: null, lastMsgOut: 0, lastStop: null, handedBack: false, firstTs: null, cwd: null, entrypoint: null, version: null }),
   ingest,
 )
 
@@ -164,6 +173,8 @@ function readSubagents(transcript, now) {
         action: st.action,
         steps: st.steps,
         outTokens: st.outTokens,
+        ctxTokens: st.ctxTokens || 0,
+        ctxWindow: ctxWindow(st),
         lastTs: st.lastTs,
         events: st.events,
       }
@@ -211,6 +222,7 @@ export function collect(now) {
       steps: st?.steps || 0,
       outTokens: st?.outTokens || 0,
       ctxTokens: st?.ctxTokens || 0,
+      ctxWindow: st ? ctxWindow(st) : null,
       lastTs: st?.lastTs || null,
       events: st?.events || [],
       subagents,
@@ -262,6 +274,7 @@ function collectForeign(now, seen) {
         steps: st.steps,
         outTokens: st.outTokens,
         ctxTokens: st.ctxTokens,
+        ctxWindow: ctxWindow(st),
         lastTs: st.lastTs,
         events: st.events,
         subagents,

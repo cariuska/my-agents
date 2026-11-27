@@ -196,6 +196,7 @@ export function collect(now) {
       steps: st.reqs.reduce((n, r) => n + r.parts.filter((p) => p.tool).length, 0),
       outTokens: null, // o Copilot não grava uso de tokens
       ctxTokens: null,
+      ctxWindow: null,
       lastTs: new Date(st.mtime).toISOString(),
       events: st.events,
       subagents: [],

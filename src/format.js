@@ -52,3 +52,12 @@ export function hash(str) {
   for (let i = 0; i < String(str).length; i++) h = Math.imul(h ^ String(str).charCodeAt(i), 16777619)
   return h >>> 0
 }
+
+// Quanto da janela de contexto está ocupado, de 0 a 100 (null se a fonte não informa).
+export function ctxPct(s) {
+  if (!s?.ctxWindow || s.ctxTokens == null) return null
+  return Math.min(100, Math.round((s.ctxTokens / s.ctxWindow) * 100))
+}
+
+export const CTX_ALERT = 80 // acima disso o agente está perto de compactar/estourar o contexto
+export const ctxColor = (pct) => (pct >= CTX_ALERT ? 'var(--pink)' : pct >= 60 ? 'var(--amber)' : 'var(--cyan)')
